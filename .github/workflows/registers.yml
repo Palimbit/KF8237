@@ -1,0 +1,20 @@
+name: Register contract
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  registers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install simulator
+        run: sudo apt-get update && sudo apt-get install -y verilator
+      - name: Report tool version
+        run: verilator --version
+      - name: Check register contract
+        run: bash scripts/test-registers.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: register-logs
+          path: build/registers/*.log
