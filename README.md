@@ -4,8 +4,10 @@
 
 Reusable core based on kitune-san/KF8237, with independent register-contract
 tests and scoped fixes. See [scope, reproduction and limitations](docs/register-contract.md).
-Run `bash scripts/test-registers.sh`. This first suite does not certify full
-8237 compatibility; the upstream limitations below remain applicable.
+Run `bash scripts/test-registers.sh` and `bash scripts/test-transfers.sh`.
+See the [transfer contract and remaining gaps](docs/transfer-contract.md).
+These suites do not certify full 8237 compatibility; the upstream limitations
+below remain applicable.
 
 ## About
 KF8237 is programmable DMA controller like 8237/8237A.

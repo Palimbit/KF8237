@@ -23,11 +23,12 @@ module KF8237_Priority_Encoder (
 
     // Internal signals
     input   logic   [1:0]   dma_rotate,
-    input   logic   [3:0]   edge_request,
+    input   logic   [3:0]   edge_request, // Retained for submodule-interface compatibility.
     output  logic   [3:0]   dma_request_state,
     output  logic   [3:0]   encoded_dma,
     input   logic           end_of_process_internal,
     input   logic   [3:0]   dma_acknowledge_internal,
+    input   logic   [3:0]   mask_on_end_of_process,
 
     // External signals
     input   logic   [3:0]   dma_request
@@ -43,7 +44,6 @@ module KF8237_Priority_Encoder (
     logic   [3:0]   mask_register;
     logic   [3:0]   request_register;
     logic   [3:0]   dma_request_ff;
-    logic   [3:0]   dma_request_lock;
 
     //
     // Command Register
@@ -92,6 +92,8 @@ module KF8237_Priority_Encoder (
                 mask_register[mask_bit_i] <= 1'b1;
             else if (master_clear)
                 mask_register[mask_bit_i] <= 1'b1;
+            else if (mask_on_end_of_process[mask_bit_i])
+                mask_register[mask_bit_i] <= 1'b1;
             else if (clear_mask_register)
                 mask_register[mask_bit_i] <= 1'b0;
             else if ((set_or_reset_mask_register) && (internal_data_bus[1:0] == bit_select[mask_bit_i]))
@@ -138,34 +140,13 @@ module KF8237_Priority_Encoder (
     end
 
     //
-    // Edge sense
-    //
-    genvar req_lock_bit_i;
-    generate
-    for (req_lock_bit_i = 0; req_lock_bit_i < 4; req_lock_bit_i = req_lock_bit_i + 1) begin : REQUEST_LCOK
-        always_ff @(negedge clock, posedge reset) begin
-            if (reset)
-                dma_request_lock[req_lock_bit_i] <= 1'b0;
-            else if (master_clear)
-                dma_request_lock[req_lock_bit_i] <= 1'b0;
-            else if (~edge_request[req_lock_bit_i])
-                dma_request_lock[req_lock_bit_i] <= 1'b0;
-            else if (encoded_dma[req_lock_bit_i]  &  dma_acknowledge_internal[req_lock_bit_i])
-                dma_request_lock[req_lock_bit_i] <= 1'b1;
-            else if (~dma_request_ff[req_lock_bit_i] & ~dma_acknowledge_internal[req_lock_bit_i])
-                dma_request_lock[req_lock_bit_i] <= 1'b0;
-            else
-                dma_request_lock[req_lock_bit_i] <= dma_request_lock[req_lock_bit_i];
-        end
-    end
-    endgenerate
-
-    //
     // DMA Request
     //
     always_comb begin
         dma_request_state   = dma_request_ff;
-        dma_request_state   = dma_request_state & ~dma_request_lock;
+        // DREQ is level-sensitive. The transfer FSM retains ownership of a
+        // block; an edge lock here would suppress subsequent single cycles
+        // and autoinitialized blocks while the peripheral holds DREQ high.
         dma_request_state   = dma_request_state & ~mask_register;
         dma_request_state   = dma_request_state | request_register;
         encoded_dma         = dma_request_state;

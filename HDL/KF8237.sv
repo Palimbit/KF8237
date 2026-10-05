@@ -99,6 +99,7 @@ module KF8237 (
     logic   [3:0]   encoded_dma;
     logic           end_of_process_internal;
     logic   [3:0]   dma_acknowledge_internal;
+    logic   [3:0]   mask_on_end_of_process;
 
     KF8237_Priority_Encoder u_Priority_Encoder (
         .clock                              (clock),
@@ -122,6 +123,7 @@ module KF8237 (
         .encoded_dma                        (encoded_dma),
         .end_of_process_internal            (end_of_process_internal),
         .dma_acknowledge_internal           (dma_acknowledge_internal),
+        .mask_on_end_of_process             (mask_on_end_of_process),
 
         // External signals
         .dma_request                        (dma_request)
@@ -209,6 +211,7 @@ module KF8237 (
         .output_temporary_data              (output_temporary_data),
         .temporary_register                 (temporary_register),
         .terminal_count_state               (terminal_count_state),
+        .mask_on_end_of_process             (mask_on_end_of_process),
 
         // External signals
         .hold_request                       (hold_request),

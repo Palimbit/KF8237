@@ -48,6 +48,7 @@ module KF8237_Timing_And_Control (
     output  logic           output_temporary_data,
     output  logic   [7:0]   temporary_register,
     output  logic   [3:0]   terminal_count_state,
+    output  logic   [3:0]   mask_on_end_of_process,
 
     // External signals
     output  logic           hold_request,
@@ -158,8 +159,7 @@ module KF8237_Timing_And_Control (
             end
         end
 
-        assign  edge_request[mode_reg_bit_i] = ((transfer_mode[mode_reg_bit_i] == `TRANSFER_MODE_SINGLE)
-                                             || (transfer_mode[mode_reg_bit_i] == `TRANSFER_MODE_BLOCK));
+        assign  edge_request[mode_reg_bit_i] = (transfer_mode[mode_reg_bit_i] == `TRANSFER_MODE_BLOCK);
     end
     endgenerate
 
@@ -172,7 +172,9 @@ module KF8237_Timing_And_Control (
 
         casez (state)
             SI: begin
-                if (0 != encoded_dma)
+                // Wait for the previous grant to be released. Once HRQ is
+                // asserted, a fast HLDA must not cancel that pending grant.
+                if ((0 != encoded_dma) && (!hold_acknowledge || hold_request))
                     next_state = S0;
             end
             S0: begin
@@ -191,8 +193,7 @@ module KF8237_Timing_And_Control (
                 if (~compressed_timing)
                     next_state = S3;
                 else if (transfer_type[dma_select] == `TRANSFER_TYPE_VERIFY) begin
-                    if (ready)
-                        next_state = S4;
+                    next_state = S4;
                     next_s4    = 1'b1;
                 end
                 else
@@ -200,8 +201,7 @@ module KF8237_Timing_And_Control (
             end
             S3: begin
                 if (transfer_type[dma_select] == `TRANSFER_TYPE_VERIFY) begin
-                    if (ready)
-                        next_state = S4;
+                    next_state = S4;
                     next_s4    = 1'b1;
                 end
                 else
@@ -541,6 +541,9 @@ module KF8237_Timing_And_Control (
     end
 
     assign  end_of_process_n_out = ~terminal_count;
+    assign  mask_on_end_of_process = (end_of_process_internal &&
+                                      !autoinitialization_enable[dma_select])
+                                     ? dma_acknowledge_internal : 4'b0000;
 
     //
     // End Of Process Signal
@@ -552,7 +555,7 @@ module KF8237_Timing_And_Control (
             external_end_of_process <= 1'b0;
         else if (state == SI)
             external_end_of_process <= 1'b0;
-        else if ((next_state == S2) && (~end_of_process_n_in))
+        else if ((state != S0) && (state != SI) && (~end_of_process_n_in))
             external_end_of_process <= 1'b1;
         else
             external_end_of_process <= external_end_of_process;
@@ -564,7 +567,7 @@ module KF8237_Timing_And_Control (
         else if (master_clear)
             end_of_process_internal <= 1'b0;
         else if (next_state == S4)
-            end_of_process_internal <= terminal_count | external_end_of_process;
+            end_of_process_internal <= terminal_count | external_end_of_process | ~end_of_process_n_in;
         else
             end_of_process_internal <= 1'b0;
     end

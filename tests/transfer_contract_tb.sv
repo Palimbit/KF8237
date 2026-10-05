@@ -17,7 +17,9 @@ module transfer_contract_tb;
     reg [7:0] memory[65536];
     integer checks=0,failures=0,cases=0,completed=0,tc_pulses=0;
     integer active_ch=0,active_type=1,active_mode=2,drop_after=0,eop_after=0;
-    reg decrement=0,monitor=0;
+    reg decrement=0,monitor=0,active_auto=0;
+    reg [15:0] active_start=0;
+    integer active_length=1;
     reg [15:0] expected_address=0,pulse_address=0;
     reg [7:0] pulse_data=0;
     reg prev_write=1,prev_io_write=1,prev_eop=1;
@@ -59,7 +61,8 @@ module transfer_contract_tb;
                input reg[15:0] start,input integer length,input bit dec,input bit auto_init);
         reg[15:0] a;
         cases++;fresh();active_ch=ch;active_type=kind;active_mode=mode;
-        decrement=dec;expected_address=start;
+        decrement=dec;expected_address=start;active_auto=auto_init;
+        active_start=start;active_length=length;
         word_wr(4'(ch*2),start);word_wr(4'(ch*2+1),16'(length-1));
         wr(11,8'((mode<<6)|(dec<<5)|(auto_init<<4)|(kind<<2)|ch));
         wr(10,8'(ch));
@@ -78,8 +81,8 @@ module transfer_contract_tb;
               "no strobes before HLDA");
         hold_acknowledge=1;
     endtask
-    task await_release;
-        for(integer n=0;n<200 && hold_request;n++)tick(1);
+    task await_release(input integer limit=200);
+        for(integer n=0;n<limit && hold_request;n++)tick(1);
         check(!hold_request,"service releases HRQ");
         hold_acknowledge=0;dma_request=0;tick(6);
     endtask
@@ -95,7 +98,8 @@ module transfer_contract_tb;
         #2;
         if(monitor && !reset) begin
             if(!memory_write_n && prev_write) begin
-                write_pending=1;pulse_address=address_out;pulse_data=pattern(completed);
+                write_pending=1;pulse_address=address_out;
+                pulse_data=pattern(active_auto?completed%active_length:completed);
                 check(!io_read_n_out && memory_read_n && io_write_n_out,"I/O to memory strobes");
                 check(address_out===expected_address,"write sequence address");
                 check(dma_acknowledge==~4'(1<<active_ch),"write DACK channel");
@@ -107,12 +111,14 @@ module transfer_contract_tb;
             if(memory_write_n && !prev_write && write_pending) begin
                 memory[pulse_address]=pulse_data;write_pending=0;completed++;
                 expected_address=decrement?expected_address-16'd1:expected_address+16'd1;
+                if(active_auto && completed%active_length==0)expected_address=active_start;
             end
             if(!io_write_n_out && prev_io_write) begin
                 io_write_pending=1;pulse_address=address_out;pulse_data=memory[address_out];
                 check(!memory_read_n && memory_write_n && io_read_n_out,"memory to I/O strobes");
                 check(address_out===expected_address,"read sequence address");
-                check(pulse_data===pattern(completed),"peripheral receives memory data");
+                check(pulse_data===pattern(active_auto?completed%active_length:completed),
+                      "peripheral receives memory data");
                 check(dma_acknowledge==~4'(1<<active_ch),"read DACK channel");
                 if(drop_after==completed+1)dma_request=0;
                 if(eop_after==completed+1)end_of_process_n_in=0;
@@ -122,6 +128,7 @@ module transfer_contract_tb;
             if(io_write_n_out && !prev_io_write && io_write_pending) begin
                 io_write_pending=0;completed++;
                 expected_address=decrement?expected_address-16'd1:expected_address+16'd1;
+                if(active_auto && completed%active_length==0)expected_address=active_start;
             end
             if(!end_of_process_n_out && prev_eop)tc_pulses++;
             if(active_type==0)
@@ -201,6 +208,35 @@ module transfer_contract_tb;
             check(tc_pulses==0,"external EOP isn't internal terminal count");
             verify_end(ai?16'h6000:16'h6002,ai?16'd7:16'd5,1);
         end
+        // Read direction waits must also hold their address and deliver once.
+        setup(0,2,2,16'h78fe,3,0,0);ready=0;drop_after=1;start_service();
+        for(integer n=0;n<20 && io_write_n_out;n++)tick(1);
+        check(!io_write_n_out,"peripheral write starts before READY");tick(10);
+        check(completed==0 && !io_write_n_out,"READY delays peripheral completion");
+        ready=1;await_release();check(completed==3,"exact peripheral commits after READY");
+        verify_end(16'h7901,16'hffff,1);
+        // Held block DREQ can request a second autoinitialized block after
+        // the CPU has released its previous HLDA. No new DREQ edge is needed.
+        setup(1,2,2,16'h8100,2,0,1);drop_after=4;
+        dma_request=4'(1<<active_ch);
+        for(integer block=0;block<2;block++)begin
+            for(integer w=0;w<20 && !hold_request;w++)tick(1);
+            check(hold_request,"held block DREQ re-requests autoinit service");
+            hold_acknowledge=1;
+            for(integer w=0;w<60 && hold_request;w++)tick(1);
+            check(!hold_request && completed==(block+1)*2,"one full block per grant");
+            tick(8);check(!hold_request,"block service waits for HLDA release");
+            hold_acknowledge=0;tick(2);
+        end
+        dma_request=0;tick(6);check(tc_pulses==2,"two autoinit terminal counts");
+        verify_end(16'h8100,1,1);
+        // FFFF represents a full 65536 transfers. Verify covers the counter
+        // boundary without allocating a stream of proprietary test data.
+        setup(0,0,2,16'h9000,65536,0,0);ready=0;start_service();
+        for(integer n=0;n<30 && dma_acknowledge==4'hf;n++)tick(1);
+        dma_request=0;await_release(300000);
+        check(completed==0 && tc_pulses==1,"full 64K verify completes exactly once");
+        verify_end(16'h9000,16'hffff,1);
         $display("TRANSFER CONTRACT: cases=%0d checks=%0d failures=%0d",cases,checks,failures);
         if(failures)$fatal(1,"transfer contract failed");
         $display("PASS transfer contract");$finish;
